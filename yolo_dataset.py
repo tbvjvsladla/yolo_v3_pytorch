@@ -73,7 +73,7 @@ class CustomDataset(Dataset):
         return f"{message}"
     
     # label matrix의 [b*x, b*y, b*w, b*h]를 [t*x, t*y, t*w, t*h]로 변환하는 코드
-    def _reverse_gt_bbox(self, b_bbox, anchor, cell, S):
+    def _reverse_gt_bbox(self, b_bbox, anchor, cell_idx, S):
         if self.anchor is None:
             raise ValueError("앵커박스 정보가 없음")
         
@@ -81,15 +81,23 @@ class CustomDataset(Dataset):
         # 시그모이드 역함수를 적용하지 않아도 된다.
         bx, by, bw, bh = b_bbox
         pw, ph = anchor
-        grid_y, grid_x = cell
+        # 정규화 좌표평면에서 그리드셀의 좌상단 Pos정보 생성
+        cy, cx = cell_idx / S
 
-        tx = bx * S - grid_x
-        ty = by * S - grid_y
+        # 정규 좌표평면 상에서 cx, cy와  bx, by의
+        # 상대적인 거리가 sigmoid(tx), sigmoid(ty)이다.
+        sig_tx = (bx - cx) * S
+        sig_ty = (by - cy) * S
 
-        tw = torch.log(bw / pw)
-        th = torch.log(bh / ph)
+        # tw, th는 앵커박스와 b_box간의 크기 비율정보를 의미함
+        # 이때 b = p * e^(t) 형식의 수식을 쓴 이유는 음수방지를 위해서임
+        # 그리고 지수함수를 쓰면 비율변화에 민감해짐
+        # Nan 방지를 위한 최소값 설정
+        eclipse = 1e-6
+        tw = torch.log(bw / pw).clamp(min=eclipse)
+        th = torch.log(bh / ph).clamp(min=eclipse)
 
-        t_bbox = [tx, ty, tw, th]
+        t_bbox = [sig_tx, sig_ty, tw, th]
         return t_bbox
     
     def __getitem__(self, idx):
@@ -123,10 +131,9 @@ class CustomDataset(Dataset):
 
             #정규좌표평면에서 center point가 위치하는 그리드셀 탐색
             for i, S in enumerate(self.S_list):
-                cell_size_x = img_info['width'] / S
-                cell_size_y = img_info['height'] / S
-                grid_x = int(bx / cell_size_x)
-                grid_y = int(by / cell_size_y)
+                # 정규화된 좌표평면 상에서 grid_y, x의 idx를 구해야 한다.
+                grid_x = int(bx * S)
+                grid_y = int(by * S)
 
                 #탐색한 그리드셀이 비어있으면 아래 정보 기입
                 if label_matrix[i][grid_y, grid_x, 4] == 0:
@@ -144,10 +151,10 @@ class CustomDataset(Dataset):
             image = self.transform(image)
 
             for i, S in enumerate(self.S_list):
-                bxby = label_matrix[i][..., :4]
+                b_boxes = label_matrix[i][..., :4]
                 # 정보가 있는 matrix탐색 -> 마스크 필터링을 활용
                 mask = label_matrix[i][..., 4] == 1
-                bxby = bxby[mask]
+                b_boxes = b_boxes[mask]
                 # 정보가 있는 그리드셀의 idx를 다시 서치
                 grid_cells = torch.nonzero(mask, as_tuple=False)
 
@@ -157,12 +164,17 @@ class CustomDataset(Dataset):
                 for b in range(self.B):
                     anchor = self.anchor[i][b]
                     # 마스크 필터를 통과한 정보가 있는 데이터만 찾아야함
-                    for j in range(len(bxby)):
-                        cell = grid_cells[j]
-                        t_bbox = self._reverse_gt_bbox(bxby[j], anchor, cell, S)
+                    for j in range(len(b_boxes)):
+                        cell_idx = grid_cells[j]
+                        t_bbox = self._reverse_gt_bbox(b_boxes[j], anchor, cell_idx, S)
                         # 계산된 t_bbox정보를 해당 셀에 맞춰 치환
                         idx = (self.C+5) * b
-                        label_matrix[i][cell[0], cell[1], idx:idx+4] = torch.tensor(t_bbox)
+                        label_matrix[i][cell_idx[0], cell_idx[1], idx:idx+4] = torch.tensor(t_bbox)
+
+                # [S, S, C+5, B]차원의 원소 Label_matrix를 [S, S, B*(C+5)]로 concat
+                # label_matrix[i] = torch.cat(
+                #     [label_matrix[i][..., j] for j in range(label_matrix[i].shape[-1])], dim=-1
+                # )
 
         return image, tuple(label_matrix)
     

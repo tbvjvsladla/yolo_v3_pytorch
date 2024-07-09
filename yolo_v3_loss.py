@@ -12,6 +12,7 @@ class Yolov3Loss(nn.Module):
         # Objectness loss 및 Classification Loss는 SSE에서 BCE로 변경
         self.bce_loss = nn.BCELoss(reduction='sum')
 
+
     def forward(self, predictions, target):
         # Assert 구문을 활용하여 grid cell의 크기가 동일한지 확인
         assert predictions.size(1) == predictions.size(2), "그리드셀 차원이 맞지 않음"
@@ -24,21 +25,27 @@ class Yolov3Loss(nn.Module):
 
         # 2) BBox좌표, OS, CS 정보 추출하여 재배치
         pred_boxes = predictions[..., :4] # [batch_size, S, S, B, 4]
+        # target_boxex의 추출된 정보는 [sigtx, sig, ty, tw, th]이니
+        #이것에 맞게 pred_boxe의 [tx, ty]도 [sigmoid(tx), sigmoid(ty)]처리
+        pred_boxes[..., :2] = torch.sigmoid(pred_boxes[..., :2])
+        # pred_boxes[..., :2] = torch.clamp(pred_boxes[..., :2], self.e, 1-self.e)
         target_boxes = target[..., :4] # [batch_size, S, S, B, 4]
 
         # Objectness Score에 sigmoid 적용 -> 이게 Yolo v3의 핵심임
-        pred_obj = torch.sigmoid(predictions[..., 4])   # [batch_size, S, S, B]
+        # [batch_size, S, S, B], 클림핑 적용
+        pred_obj = torch.sigmoid(predictions[..., 4])
         target_obj = target[..., 4]    # [batch_size, S, S, B]
 
         # Class scores에 sigmoid 적용 -> 이게 Yolo v3의 핵심임
-        pred_class = torch.sigmoid(predictions[..., 5:])   # [batch_size, S, S, B]
+        # [batch_size, S, S, B], 클림핑 적용
+        pred_class = torch.sigmoid(predictions[..., 5:])
         target_class = target[..., 5:] # [batch_size, S, S, B, C]
 
         # 3) 마스크 필터 생성
         coord_mask = target_obj > 0 # [batch_size, S, S, B]
         noobj_mask = target_obj <= 0 # [batch_size, S, S, B]
         # 예외처리 : 객체가 아에 없는 이미지에 대한
-        if coord_mask.sum() == 0:
+        if coord_mask.sum() == 0 and noobj_mask.sum() == 0:
             return torch.tensor(0.0, requires_grad=True)
 
         # 4) 마스크 필터를 적용해 Bbox의 데이터 필터링
@@ -56,7 +63,7 @@ class Yolov3Loss(nn.Module):
         # 6) OS(objectness Score)의 마스크 필터를 활용한 필터링
         # 7) Objectness Loss 계산하기
         obj_loss = self.bce_loss(pred_obj[coord_mask], target_obj[coord_mask])
-
+        
         cal = self.bce_loss(pred_obj[noobj_mask], target_obj[noobj_mask])
         noobj_loss = self.lambda_noobj * cal
 

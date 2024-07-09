@@ -149,9 +149,9 @@ class YOLOv3Metrics:
         S = pred_boxes.size(1)
         # 그리드 셀의 idx를 저장용 매쉬 그리드 행렬 생성
         # 이 매쉬 그리드는 글로 설명하긴 어려운데 아무튼 idx을 저장하는 효율적인 행렬이다
-        grid_x, grid_y = torch.meshgrid(torch.arange(S), torch.arange(S), indexing='ij')
-        grid_x = grid_x.to(self.device).float()
+        grid_y, grid_x = torch.meshgrid(torch.arange(S), torch.arange(S), indexing='ij')
         grid_y = grid_y.to(self.device).float()
+        grid_x = grid_x.to(self.device).float()
         # 생성한 매쉬그리드는 CPU에 할당되서 GPU로 이전을 꼭 시켜줘야함
 
         # 모델의 예측값 tx, ty는 사전에 sigmoid를 적용한다.
@@ -182,6 +182,9 @@ class YOLOv3Metrics:
         grid_x = grid_x.unsqueeze(0).unsqueeze(-1).expand_as(tx)
         grid_y = grid_y.unsqueeze(0).unsqueeze(-1).expand_as(ty)
 
+        # grid / s -> 이것은 그리드셀의 좌상돤 좌표값이 됨(cx, cy)
+        # tx, ty는 sigmoid처리돤 c_pos와 b_pos의 '상대적인 거리'
+        # 모두 정규화 좌표평면이니 t_pos도 1/s 처리 해줘야함
         bx = (tx + grid_x) / S
         by = (ty + grid_y) / S
 
