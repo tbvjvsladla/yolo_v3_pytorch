@@ -85,6 +85,11 @@ class YOLOv3(nn.Module):
         outputs = [head(fpn_feature) for head, fpn_feature in zip(self.heads, fpn_features)]
         return outputs
     
+    # 가중치 파일을 로드하기 위한 함수 신규 추가
+    def load_weights(self, weight_path):
+        state_dict = torch.load(weight_path)
+        self.load_state_dict(state_dict)
+    
 
 def debug(model, input_size):
     dummy_input = torch.randn(1, *input_size)
@@ -96,7 +101,15 @@ def debug(model, input_size):
 
 
 if __name__ == '__main__':
+    # backbone에 대한 가중치 파일을 불러온다면 아래의 코드
     backbone = Darknet53(pretrained=True)
     fpn = FPN(channels_list=features_shape)
     yolov3 = YOLOv3(backbone, fpn, num_classes=80)
+    debug(yolov3, input_size=(3, 416, 416))
+
+    # yolo v3에 대한 학습치 가중치 파일을 불러온다면 아래의 코드
+    backbone = Darknet53(pretrained=False)
+    fpn = FPN(channels_list=features_shape)
+    yolov3 = YOLOv3(backbone, fpn, num_classes=80)
+    yolov3.load_weights("Yolo_v3.pth")
     debug(yolov3, input_size=(3, 416, 416))
