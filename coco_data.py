@@ -1,3 +1,6 @@
+import torch
+
+
 # 슈퍼 클래스와 해당 색상 매핑
 cls_color = {
     "person": "magenta",
@@ -59,3 +62,18 @@ used_categories = [
 ]
 
 real_class_idx = {cat_id: idx for idx, cat_id in enumerate(used_categories)}
+
+
+# K-mean Clustering을 수행하여 얻은 9개의 anchorbox
+# 해당 데이터는 정규화 좌표평면에서 얻은 Anchorbox 크기값이다.
+anchor_box_list = torch.tensor([[[0.0686, 0.0861],
+                                 [0.1840, 0.2270],
+                                 [0.2308, 0.4469]],
+
+                                [[0.4641, 0.2762],
+                                 [0.3029, 0.7475],
+                                 [0.5187, 0.5441]],
+
+                                [[0.8494, 0.4666],
+                                 [0.5999, 0.8385],
+                                 [0.9143, 0.8731]]])

@@ -1,9 +1,11 @@
 import torch
-from yolo_v3_metrics import YOLOv3Metrics, anchor_box_list
+from yolo_v3_metrics import YOLOv3Metrics
+import coco_data #데이터 관리용 py파일
 
 # non_max_suppression과정은 YOLOv3Metrics의 함수를 재사용하자.
 class Yolov3NMS(YOLOv3Metrics):
-    def __init__(self, B=3, C=80, iou_th=0.4, conf_th=0.5, anchor=anchor_box_list):
+    def __init__(self, B=3, C=80, iou_th=0.4, conf_th=0.5, 
+                 anchor=coco_data.anchor_box_list):
         super().__init__(B, C, iou_th=iou_th, anchor=anchor)
         self.conf_th = conf_th #NMS의 첫번째 필터링 -> OS를 필터링하는 인자값
 

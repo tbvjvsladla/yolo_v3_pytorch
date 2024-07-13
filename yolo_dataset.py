@@ -3,40 +3,15 @@ import torch
 from pycocotools.coco import COCO
 from torch.utils.data import Dataset
 from PIL import Image
-
-
-# 사용되지 않는 category_id를 제외한 딕셔너리 생성
-used_categories = [
-    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 
-    23, 24, 25, 27, 28, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 
-    46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 
-    65, 67, 70, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 84, 85, 86, 87, 88, 
-    89, 90
-]
-
-real_class_idx = {cat_id: idx for idx, cat_id in enumerate(used_categories)}
-
-# K-mean Clustering을 수행하여 얻은 9개의 anchorbox
-# 해당 데이터는 정규화 좌표평면에서 얻은 Anchorbox 크기값이다.
-anchor_box_list = torch.tensor([[[0.0686, 0.0861],
-                                 [0.1840, 0.2270],
-                                 [0.2308, 0.4469]],
-
-                                [[0.4641, 0.2762],
-                                 [0.3029, 0.7475],
-                                 [0.5187, 0.5441]],
-
-                                [[0.8494, 0.4666],
-                                 [0.5999, 0.8385],
-                                 [0.9143, 0.8731]]])
+import coco_data #데이터 관리용 py파일
 
 class CustomDataset(Dataset):
-    def __init__(self, root, img_set=None, transform=None, 
+    def __init__(self, root, load_anno=None, transform=None, 
                  S=[52, 26, 13], B=3, C=80,
                  anchor = None):
         self.root = root #COCO 데이터셋의 메인 폴더 경로
 
-        self.img_set = img_set
+        self.load_anno = load_anno
         self.transform = transform
         self.S_list = S # Gird Cell사이즈 -> [13, 26, 52] -> 인자값으로 받기
         self.B = B # anchorbox의 개수 : 3
@@ -47,16 +22,12 @@ class CustomDataset(Dataset):
 
         self.anno_path = os.path.join(root, 'annotations')
 
-        if img_set == 'train':
-            self.img_dir = os.path.join(root, 'my_train_img')
-            self.coco = COCO(os.path.join(self.anno_path, 'instances_val2014.json'))
-        elif img_set == 'val':
-            self.img_dir = os.path.join(root, 'my_val_img')
-            self.coco = COCO(os.path.join(self.anno_path, 'instances_val2017.json'))
-        elif img_set == 'test':
-            pass
+        if load_anno is None:
+            raise ValueError("주석파일 정보기입")
         else:
-            raise ValueError("이미지 모드 확인하기")
+            self.img_dir = os.path.join(root, load_anno)
+            anno_file = 'instances_' + load_anno + '.json'
+            self.coco = COCO(os.path.join(self.anno_path, anno_file))
         
         # 모드별 이미지 ID리스트 불러오기
         self.img_ids = self.coco.getImgIds()
@@ -120,7 +91,7 @@ class CustomDataset(Dataset):
         for ann in anns:
             bbox = ann['bbox']
             # CP는 Class Probability이니 = Class ID
-            CP_idx = real_class_idx[ann['category_id']]
+            CP_idx = coco_data.real_class_idx[ann['category_id']]
 
             x, y, w, h = bbox
             # bbox 좌표 정규화

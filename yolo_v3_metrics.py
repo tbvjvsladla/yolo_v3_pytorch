@@ -1,26 +1,12 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
-
-# K-mean Clustering을 수행하여 얻은 9개의 anchorbox
-# 해당 데이터는 정규화 좌표평면에서 얻은 Anchorbox 크기값이다.
-anchor_box_list = torch.tensor([[[0.0686, 0.0861],
-                                 [0.1840, 0.2270],
-                                 [0.2308, 0.4469]],
-
-                                [[0.4641, 0.2762],
-                                 [0.3029, 0.7475],
-                                 [0.5187, 0.5441]],
-
-                                [[0.8494, 0.4666],
-                                 [0.5999, 0.8385],
-                                 [0.9143, 0.8731]]])
-
+import coco_data #데이터 관리용 py파일
 
 class YOLOv3Metrics:
     def __init__(self, B=3, C=80, iou_th = 0.5,
-                 anchor=None, device='cuda'):
+                 anchor=coco_data.anchor_box_list, 
+                 device='cuda'):
         self.B = B
         self.C = C
         self.device = device # 연산에 필요한 변수를 다 GPU로 올려야 함
@@ -239,7 +225,7 @@ def metrics_debug():
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    metrics = YOLOv3Metrics(anchor=anchor_box_list, device=device.type)
+    metrics = YOLOv3Metrics(anchor=coco_data.anchor_box_list, device=device.type)
     metric_res = metrics.cal_acc_func(outputs, labels)
 
     iou_score, precision, recall, top1_error = metric_res
