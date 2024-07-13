@@ -37,8 +37,8 @@ class YOLOv3Metrics:
         sum_recall = 0
         sum_top1_error = 0
 
-        # outputs와 labels를 GPU로 이전
-        self.outputs = [output.to(self.device) for output in outputs]
+        # outputs와 labels를 GPU로 이전 + output의 데이터 정렬 수행
+        self.outputs = [output.to(self.device).permute(0, 2, 3, 1) for output in outputs]
         self.labels = [label.to(self.device) for label in labels]
 
         # 리스트 내 원소가 0, 1, 2 3개니까 cnt는 0~2 를 순회한다.
@@ -167,30 +167,38 @@ class YOLOv3Metrics:
     # [tx, ty, tw, th] -> [bx, by, bw, bh]변환을 실제로 수행하는 함수
     # [t*x, t*y, t*w, t*h] -> [b*x, b*y, b*w, b*h]변환을 실제로 수행하는 함수
     def get_pred_bbox(self, t_bbox, anchor, grid_x, grid_y, S):
-        # 여기에 들어오는 [tx], [ty], [tw], [th]는 모두 
-        # [Batch_size, S, S, B] 형태임 -> B : [anchor1, 2, 3]
+        # 모든 텐서를 동일한 디바이스로 이동
+        device = t_bbox.device
+        anchor = anchor.to(device)
+        grid_x = grid_x.to(device)
+        grid_y = grid_y.to(device)
+
+        # 여기에 들어오는 [tx], [ty], [tw], [th]는 모두 [Batch_size, S, S, B] 형태
         tx, ty = t_bbox[..., 0], t_bbox[..., 1]
         tw, th = t_bbox[..., 2], t_bbox[..., 3]
 
-        # cnt는 작은 -> 중간 -> 큰 객체의 리스트를 순환하는 변수고
-        # anchor box list에서 cnt 값에 맞춰 객체 크기용 
-        # box [3x2]를 가져옴 -> [3(B)], [3(B)]으로 나눠가짐
-        pw, ph = anchor[self.cnt][..., 0], anchor[self.cnt][..., 1]
+        # S_list를 선언하여 각 S 값에 따른 앵커 박스 인덱스를 설정
+        S_list = [52, 26, 13]
+        anchor_idx = S_list.index(S)
 
-        # meshgrid로 정의된 grid_x, grid_x는 모두 [S, S]차원을 가짐
-        # [S, S] -> [1, S, S, 1] -> [batch_size, S, S, C+5]로 차원확장
+        # anchor box list에서 cnt 값에 맞춰 객체 크기용 box [3x2]를 가져옴
+        pw, ph = anchor[anchor_idx][..., 0], anchor[anchor_idx][..., 1]
+
+        # meshgrid로 정의된 grid_x, grid_x는 모두 [S, S] 차원을 가짐
+        # [S, S] -> [1, S, S, 1] -> [batch_size, S, S, B]로 차원 확장
         grid_x = grid_x.unsqueeze(0).unsqueeze(-1).expand_as(tx)
         grid_y = grid_y.unsqueeze(0).unsqueeze(-1).expand_as(ty)
 
-        # grid / s -> 이것은 그리드셀의 좌상돤 좌표값이 됨(cx, cy)
-        # tx, ty는 sigmoid처리돤 c_pos와 b_pos의 '상대적인 거리'
-        # 모두 정규화 좌표평면이니 t_pos도 1/s 처리 해줘야함
+        # grid / S -> 그리드셀의 좌상단 좌표값이 됨(cx, cy)
+        # tx, ty는 sigmoid 처리된 c_pos와 b_pos의 '상대적인 거리'
+        # 모두 정규화 좌표 평면이니 t_pos도 1/S 처리 해줘야 함
         bx = (tx + grid_x) / S
         by = (ty + grid_y) / S
 
         bw = pw * torch.exp(tw)
         bh = ph * torch.exp(th)
-        # 좌표변환이 완료된 [bx, by, bw, bh]은 스택으로 쌓아서 return
+        
+        # 좌표 변환이 완료된 [bx, by, bw, bh]은 스택으로 쌓아서 return
         b_bbox = torch.stack([bx, by, bw, bh], dim=-1)
         return b_bbox
     
@@ -222,7 +230,7 @@ def metrics_debug():
     S_list = [52, 26, 13]
     outputs, labels = [], []
     for S in S_list:
-        output = torch.rand(1, S, S, 255)
+        output = torch.rand(1, 255, S, S)
         outputs.append(output)
         label = torch.rand(1, S, S, 255)
         for i in range(3):

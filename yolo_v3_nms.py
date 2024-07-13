@@ -3,44 +3,14 @@ from yolo_v3_metrics import YOLOv3Metrics, anchor_box_list
 
 # non_max_suppression과정은 YOLOv3Metrics의 함수를 재사용하자.
 class Yolov3NMS(YOLOv3Metrics):
-    def __init__(self, B=3, C=80, iou_th=0.4, conf_th=0.5):
-        super().__init__(B, C, iou_th=iou_th, anchor=anchor_box_list)
+    def __init__(self, B=3, C=80, iou_th=0.4, conf_th=0.5, anchor=anchor_box_list):
+        super().__init__(B, C, iou_th=iou_th, anchor=anchor)
         self.conf_th = conf_th #NMS의 첫번째 필터링 -> OS를 필터링하는 인자값
 
     # YOLOv3Metrics의 2개 함수 get_pred_bbox, compute_iou를 재사용한다.
     # get_pred_bbox는 재정의 해야함 -> 디바이스 문제...
     def get_pred_bbox(self, t_bbox, anchor, grid_x, grid_y, S):
-        # 모든 텐서를 동일한 디바이스로 이동
-        device = t_bbox.device
-        anchor = anchor.to(device)
-        grid_x = grid_x.to(device)
-        grid_y = grid_y.to(device)
-
-        # 여기에 들어오는 [tx], [ty], [tw], [th]는 모두 [Batch_size, S, S, B] 형태
-        tx, ty = t_bbox[..., 0], t_bbox[..., 1]
-        tw, th = t_bbox[..., 2], t_bbox[..., 3]
-
-        # cnt는 작은 -> 중간 -> 큰 객체의 리스트를 순환하는 변수
-        # anchor box list에서 cnt 값에 맞춰 객체 크기용 box [3x2]를 가져옴
-        pw, ph = anchor[self.cnt][..., 0], anchor[self.cnt][..., 1]
-
-        # meshgrid로 정의된 grid_x, grid_x는 모두 [S, S] 차원을 가짐
-        # [S, S] -> [1, S, S, 1] -> [batch_size, S, S, B]로 차원 확장
-        grid_x = grid_x.unsqueeze(0).unsqueeze(-1).expand_as(tx)
-        grid_y = grid_y.unsqueeze(0).unsqueeze(-1).expand_as(ty)
-
-        # grid / S -> 그리드셀의 좌상단 좌표값이 됨(cx, cy)
-        # tx, ty는 sigmoid 처리된 c_pos와 b_pos의 '상대적인 거리'
-        # 모두 정규화 좌표 평면이니 t_pos도 1/S 처리 해줘야 함
-        bx = (tx + grid_x) / S
-        by = (ty + grid_y) / S
-
-        bw = pw * torch.exp(tw)
-        bh = ph * torch.exp(th)
-        
-        # 좌표 변환이 완료된 [bx, by, bw, bh]은 스택으로 쌓아서 return
-        b_bbox = torch.stack([bx, by, bw, bh], dim=-1)
-        return b_bbox
+        return super().get_pred_bbox(t_bbox, anchor, grid_x, grid_y, S)
     
     def compute_iou(self, box1, box2):
         return super().compute_iou(box1, box2)
@@ -119,9 +89,7 @@ class Yolov3NMS(YOLOv3Metrics):
         f_cp_idx = []
 
         # outputs 리스트 정보를 원소로 분해
-        for cnt, pred in enumerate(outputs):
-            self.cnt = cnt # 리스트 순회값으로 cnt 초기화
-            
+        for pred in outputs:
             b_bboxes, cp_val, cp_idx = self.process_predictions(pred)
             f_b_bboxes.append(b_bboxes)
             f_cp_val.append(cp_val)
