@@ -164,7 +164,7 @@ class YOLOv3Metrics:
         tw, th = t_bbox[..., 2], t_bbox[..., 3]
 
         # S_list를 선언하여 각 S 값에 따른 앵커 박스 인덱스를 설정
-        S_list = [52, 26, 13]
+        S_list = coco_data.S_list
         anchor_idx = S_list.index(S)
 
         # anchor box list에서 cnt 값에 맞춰 객체 크기용 box [3x2]를 가져옴
