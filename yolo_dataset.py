@@ -7,7 +7,7 @@ import coco_data #데이터 관리용 py파일
 
 class CustomDataset(Dataset):
     def __init__(self, root, load_anno=None, transform=None, 
-                 S=[52, 26, 13], B=3, C=80,
+                 S=coco_data.S_list, B=3, C=80,
                  anchor = None):
         self.root = root #COCO 데이터셋의 메인 폴더 경로
 
@@ -61,12 +61,15 @@ class CustomDataset(Dataset):
         sig_ty = (by - cy) * S
 
         # tw, th는 앵커박스와 b_box간의 크기 비율정보를 의미함
-        # 이때 b = p * e^(t) 형식의 수식을 쓴 이유는 음수방지를 위해서임
-        # 그리고 지수함수를 쓰면 비율변화에 민감해짐
-        # Nan 방지를 위한 최소값 설정
-        eclipse = 1e-6
-        tw = torch.log(bw / pw).clamp(min=eclipse)
-        th = torch.log(bh / ph).clamp(min=eclipse)
+        # 이때 bw, bh, pw, ph가 [0~1] 정규좌표평면상의 데이터여서
+        # 역함수 t = ln(b/p)를 수행 시 NaN이 발생할 수 있다.
+        # 따라서 스케일링 + 0 이 되는것 방지 두개의 안전장치를 걸어둔다.
+        bw_scaled = bw * 416 + 1e-6
+        bh_scaled = bh * 416 + 1e-6
+        pw_scaled = pw * 416 + 1e-6
+        ph_scaled = ph * 416 + 1e-6
+        tw = torch.log(bw_scaled / pw_scaled)
+        th = torch.log(bh_scaled / ph_scaled)
 
         t_bbox = [sig_tx, sig_ty, tw, th]
         return t_bbox
@@ -142,12 +145,15 @@ class CustomDataset(Dataset):
                         idx = (self.C+5) * b
                         label_matrix[i][cell_idx[0], cell_idx[1], idx:idx+4] = torch.tensor(t_bbox)
 
-                # [S, S, C+5, B]차원의 원소 Label_matrix를 [S, S, B*(C+5)]로 concat
-                # label_matrix[i] = torch.cat(
-                #     [label_matrix[i][..., j] for j in range(label_matrix[i].shape[-1])], dim=-1
-                # )
-
         return image, tuple(label_matrix)
+    
+    # 디버그용 img 정보 취득 함수
+    def get_img_info(self, idx):
+        img_id = self.img_ids[idx]
+        img_info = self.coco.loadImgs(img_id)[0]
+        ann_ids = self.coco.getAnnIds(imgIds=img_id)
+        img_info['obj_num'] = len(ann_ids)
+        return img_info
     
 
 if __name__ == '__main__':
