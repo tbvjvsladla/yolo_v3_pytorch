@@ -1,19 +1,32 @@
 import torch
 from tqdm import tqdm  # 훈련 진행상황 체크
-from yolo_v3_metrics import YOLOv3Metrics, anchor_box_list
 
 class ModelTrainer:
-    def __init__(self, epoch_step, B=3, C=80, device='cuda'):
+    def __init__(self, epoch_step, device='cuda'):
         self.epoch_step = epoch_step
-        self.device = torch.device(device if torch.cuda.is_available() else 'cpu')
-        self.metrics = YOLOv3Metrics(B=B, C=C, anchor=anchor_box_list, device=self.device)
+        self.device = device # 연산에 필요한 변수를 다 GPU로 올려야 함
 
-    def model_train(self, model, data_loader, loss_fn, optimizer_fn, scheduler_fn, processing_device, epoch):
+    def update_metrics(self, outputs, labels, metric_fn, metrics, n):
+        metric_res = metric_fn.cal_acc_func(outputs, labels)
+        # iou_score, precision, recall, top1_error로 데이터가 출력됨
+        i, p, r, t = metric_res
+        n += 1
+        # 이동평균 필터로 현재 평가지표의 평균값을 업데이트
+        metrics['I'] = metrics['I'] + (i - metrics['I']) / n
+        metrics['P'] = metrics['P'] + (p - metrics['P']) / n
+        metrics['R'] = metrics['R'] + (r - metrics['R']) / n
+        metrics['T'] = metrics['T'] + (t - metrics['T']) / n
+        return metrics, n
+
+    def model_train(self, model, data_loader, 
+                    loss_fn, optimizer_fn, scheduler_fn, metric_fn,
+                    epoch):
         model.train()  # 모델을 훈련 모드로 설정
 
         # loss와 accuracy를 계산하기 위한 임시 변수를 생성
         run_size, run_loss = 0, 0
-        avg_iou, avg_precision, avg_recall, avg_top1_error = 0, 0, 0, 0
+        # I = IOU, P = Precision, R = Recall, T = Top-1_error
+        run_metrics = {'I': 0, 'P': 0, 'R': 0, 'T': 0}
         n = 0  # 값의 개수
 
         # 특정 에폭일 때만 tqdm 진행상황 바 생성
@@ -25,18 +38,13 @@ class ModelTrainer:
         # label은 리스트이니 labels로 이름변경함
         for image, labels in progress_bar:
             # 입력된 데이터를 먼저 GPU로 이전하기
-            image = image.to(processing_device)
+            image = image.to(self.device)
             # 라벨이 리스트 정보이기에 한개씩 떼어낸다.
-            labels = [label.to(processing_device) for label in labels]
+            labels = [label.to(self.device) for label in labels]
 
             # 전사 과정 수행
             outputs = model(image)
-            outputs = [output.permute(0, 2, 3, 1) for output in outputs]
-
-            loss = 0
-            for output, label in zip(outputs, labels):
-                loss_element = loss_fn(output, label)
-                loss += loss_element
+            loss = loss_fn(outputs, labels)
 
             # backward과정 수행
             optimizer_fn.zero_grad()
@@ -48,32 +56,32 @@ class ModelTrainer:
 
             # 현재까지 수행한 loss값을 얻어냄
             run_loss += loss.item() * image.size(0)
+            # desc에 진행상황 체크용 분모값
             run_size += image.size(0)
 
             # 성능지표 계산하기 -> 리스트이니 outputs, labels임을 유의하자.
-            metric_res = self.metrics.cal_acc_func(outputs, labels)
-            iou_score, precision, recall, top1_error = metric_res
-            n += 1
-            avg_iou = avg_iou + (iou_score - avg_iou) / n
-            avg_precision = avg_precision + (precision - avg_precision) / n
-            avg_recall = avg_recall + (recall - avg_recall) / n
-            avg_top1_error = avg_top1_error + (top1_error - avg_top1_error) / n
+            run_metrics, n = self.update_metrics(outputs, labels, 
+                                                 metric_fn, 
+                                                 run_metrics, n)
 
             # tqdm bar에 추가 정보 기입
             if (epoch + 1) % self.epoch_step == 0 or epoch == 0:
                 desc = (f"[훈련중] Loss: {run_loss / run_size:.2f}, "
-                        f"KPI: [{avg_iou:.3f}, {avg_precision:.3f}, "
-                        f"{avg_recall:.3f}, {avg_top1_error:.3f}]")
+                        f"KPI: [{run_metrics['I']:.3f}, {run_metrics['P']:.3f}, "
+                        f"{run_metrics['R']:.3f}, {run_metrics['T']:.3f}]")
                 progress_bar.set_description(desc)
 
         avg_loss = run_loss / len(data_loader.dataset)
-        avg_KPI = [avg_iou, avg_precision, avg_recall, avg_top1_error]
+        avg_KPI = [val for key, val in run_metrics.items()]
         return avg_loss, avg_KPI
 
-    def model_evaluate(self, model, data_loader, loss_fn, processing_device, epoch):
+    def model_evaluate(self, model, data_loader, 
+                       loss_fn, metric_fn,
+                       epoch):
         model.eval()  # 모델을 평가 모드로 전환
         run_loss = 0
-        avg_iou, avg_precision, avg_recall, avg_top1_error = 0, 0, 0, 0
+        # I = IOU, P = Precision, R = Recall, T = Top-1_error
+        run_metrics = {'I': 0, 'P': 0, 'R': 0, 'T': 0}
         n = 0  # 값의 개수
 
         # gradient 업데이트를 방지해주자
@@ -84,29 +92,22 @@ class ModelTrainer:
                 progress_bar = data_loader
 
             for image, labels in progress_bar:
-                image = image.to(processing_device)
-                labels = [label.to(processing_device) for label in labels]
+                image = image.to(self.device)
+                labels = [label.to(self.device) for label in labels]
 
+                # 전사과정 수행
                 outputs = model(image)
-                outputs = [output.permute(0, 2, 3, 1) for output in outputs]
-
-                loss = 0
-                for output, label in zip(outputs, labels):
-                    loss_element = loss_fn(output, label)
-                    loss += loss_element
-
+                loss = loss_fn(outputs, labels)
+                # 현재까지 수행한 loss값을 얻어냄
                 run_loss += loss.item() * image.size(0)
 
-                metric_res = self.metrics.cal_acc_func(outputs, labels)
-                iou_score, precision, recall, top1_error = metric_res
-                n += 1
-                avg_iou = avg_iou + (iou_score - avg_iou) / n
-                avg_precision = avg_precision + (precision - avg_precision) / n
-                avg_recall = avg_recall + (recall - avg_recall) / n
-                avg_top1_error = avg_top1_error + (top1_error - avg_top1_error) / n
+                # 성능지표 계산하기 -> 리스트이니 outputs, labels임을 유의하자.
+                run_metrics, n = self.update_metrics(outputs, labels, 
+                                                     metric_fn, 
+                                                     run_metrics, n)
 
         avg_loss = run_loss / len(data_loader.dataset)
-        avg_KPI = [avg_iou, avg_precision, avg_recall, avg_top1_error]
+        avg_KPI = [val for key, val in run_metrics.items()]
         return avg_loss, avg_KPI
     
 

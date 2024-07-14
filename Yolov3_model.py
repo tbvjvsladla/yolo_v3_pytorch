@@ -3,9 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from darknet53_FPN import *
-
-# FPN모델은 3개의 채널 리스트를 인자값으로 받아야함
-features_shape = [256, 512, 1024]
+import coco_data
 
 class FPN(nn.Module):
     def __init__(self, channels_list, num_repeats=2):
@@ -76,7 +74,7 @@ class YOLOv3(nn.Module):
         self.num_classes = num_classes
 
         self.heads = nn.ModuleList([
-            YOLOHead(in_channels, num_classes) for in_channels in features_shape
+            YOLOHead(in_channels, num_classes) for in_channels in coco_data.fpn_in_ch
         ])
 
     def forward(self, x):
@@ -103,13 +101,13 @@ def debug(model, input_size):
 if __name__ == '__main__':
     # backbone에 대한 가중치 파일을 불러온다면 아래의 코드
     backbone = Darknet53(pretrained=True)
-    fpn = FPN(channels_list=features_shape)
+    fpn = FPN(channels_list=coco_data.fpn_in_ch)
     yolov3 = YOLOv3(backbone, fpn, num_classes=80)
     debug(yolov3, input_size=(3, 416, 416))
 
     # yolo v3에 대한 학습치 가중치 파일을 불러온다면 아래의 코드
     backbone = Darknet53(pretrained=False)
-    fpn = FPN(channels_list=features_shape)
+    fpn = FPN(channels_list=coco_data.fpn_in_ch)
     yolov3 = YOLOv3(backbone, fpn, num_classes=80)
     yolov3.load_weights("Yolo_v3.pth")
     debug(yolov3, input_size=(3, 416, 416))
