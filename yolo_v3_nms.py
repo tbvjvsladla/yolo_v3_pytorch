@@ -1,22 +1,16 @@
 import torch
-from yolo_v3_metrics import YOLOv3Metrics
 import coco_data #데이터 관리용 py파일
+from yolo_util import YoloComFunc #좌표변환, IOU연산 클래스
 
 # non_max_suppression과정은 YOLOv3Metrics의 함수를 재사용하자.
-class Yolov3NMS(YOLOv3Metrics):
-    def __init__(self, B=3, C=80, iou_th=0.4, conf_th=0.5, 
+class Yolov3NMS(YoloComFunc): #get_pred_bbox, compute_iou 함수를 상속한다.
+    def __init__(self, B=3, iou_th=0.4, conf_th=0.5,
                  anchor=coco_data.anchor_box_list):
-        super().__init__(B, C, iou_th=iou_th, anchor=anchor)
+        super().__init__(anchor=anchor) # 이 anchor 값을 부모 클래스에 전달
         self.conf_th = conf_th #NMS의 첫번째 필터링 -> OS를 필터링하는 인자값
+        self.iou_th = iou_th #NMS의 두번째 필터링 -> 겹치는 박스 제거 인자값
+        self.B = B
 
-    # YOLOv3Metrics의 2개 함수 get_pred_bbox, compute_iou를 재사용한다.
-    # get_pred_bbox는 재정의 해야함 -> 디바이스 문제...
-    def get_pred_bbox(self, t_bbox, anchor, grid_x, grid_y, S):
-        return super().get_pred_bbox(t_bbox, anchor, grid_x, grid_y, S)
-    
-    def compute_iou(self, box1, box2):
-        return super().compute_iou(box1, box2)
-    
     # NMS를 수행하는 준비과정인 데이터 추출 및 필터링 함수
     def process_predictions(self, pred):
         # 데이터 차원 배치 재정렬 하기
@@ -27,21 +21,18 @@ class Yolov3NMS(YOLOv3Metrics):
         S = pred.size(1)
 
         # [batch_size, S, S, B*(C+5)]-> [batch_size, S, S, B, (C+5)]
-        prediction = pred.view(bs, S, S, self.B, -1)
+        pred = pred.view(bs, S, S, self.B, -1)
 
         # tx, ty, OS(objectness score), CP(class probability 항목에 sigmoid 적용
-        prediction[..., :2] = torch.sigmoid(prediction[..., :2])  # t_x, t_y
-        prediction[..., 4:] = torch.sigmoid(prediction[..., 4:])  # OS, CP
+        pred[..., :2] = torch.sigmoid(pred[..., :2])  # t_x, t_y
+        pred[..., 4:] = torch.sigmoid(pred[..., 4:])  # OS, CP
 
-        t_bboxes = prediction[..., :4] #[batch_size, S, S, B, 4]
-        obj_score = prediction[..., 4] #[batch_size, S, S, B]
-        cp_score = prediction[..., 5:] #[batch_size, S, S, B, C]
-
-        # 그리드셀 좌표 색인을 위한 매쉬그리드 데이터 생성
-        grid_y, grid_x = torch.meshgrid(torch.arange(S), torch.arange(S), indexing='ij')
+        t_bboxes = pred[..., :4] #[batch_size, S, S, B, 4]
+        obj_score = pred[..., 4] #[batch_size, S, S, B]
+        cp_score = pred[..., 5:] #[batch_size, S, S, B, C]
 
         # [tx, ty, tw, th] -> [bx, by, bw, bh] 변환 실행
-        b_bboxes = self.get_pred_bbox(t_bboxes, self.anchor, grid_x, grid_y, S)
+        b_bboxes = self.get_pred_bbox(t_bboxes)
 
         # OS 정보를 conf_th로 필터링 (1차)
         # 각각 마스크 필터를 통과하여 [N, ~~] 차원으로 변환된다.
@@ -75,7 +66,7 @@ class Yolov3NMS(YOLOv3Metrics):
             keep_boxes.append(torch.cat((chosen_box, chosen_val, chosen_idx), dim=-1))
             if b_bboxes.size(0) == 1:
                 break
-            
+
             # 신뢰도값이 가장 큰 box랑 나머지 bbox를 비교하여 iou 연산
             # 연산하여 iou가 겹치는 bbox 항목을 제거한다.
             ious = self.compute_iou(chosen_box, b_bboxes[1:])
@@ -83,7 +74,6 @@ class Yolov3NMS(YOLOv3Metrics):
             cp_val = cp_val[1:][ious < self.iou_th]
             cp_idx = cp_idx[1:][ious < self.iou_th]
         return keep_boxes
-
 
     def non_max_suppression(self, outputs):
         f_b_bboxes = []
@@ -123,7 +113,7 @@ class Yolov3NMS(YOLOv3Metrics):
 
 # 디버깅을 위한 nms_debug 함수
 def nms_debug():
-    S_list = [52, 26, 13]
+    S_list = coco_data.S_list
     outputs = []
 
     for S in S_list:
@@ -135,7 +125,6 @@ def nms_debug():
 
     for box in boxes:
         print(box)
-
 
 if __name__ == '__main__':
     nms_debug()
