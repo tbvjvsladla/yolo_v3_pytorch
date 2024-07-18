@@ -1,8 +1,11 @@
 import torch
 import torch.nn as nn
+import coco_data
+from yolo_util import YoloComFunc
 
 class Yolov3Loss(nn.Module):
-    def __init__(self, B=3, C=80, device='cuda'):
+    def __init__(self, B=3, C=80, device='cuda', 
+                 cho_mode=False, anchor=coco_data.anchor_box_list):
         super(Yolov3Loss, self).__init__()
         # self.S = S # 그리드셀의 단위(52, 26, 13)
         self.B = B # 이 값은 Anchor box의 개수로 인자 변환
@@ -12,6 +15,9 @@ class Yolov3Loss(nn.Module):
         # Objectness loss 및 Classification Loss는 SSE에서 BCE로 변경
         self.bce_loss = nn.BCELoss(reduction='sum')
         self.device = device # 연산에 필요한 변수를 다 GPU로 올려야 함
+
+        self.cho_mode = cho_mode
+        self.util_func = YoloComFunc(anchor=anchor)
 
     def forward(self, outputs, labels):
         # outputs, labels가 리스트 데이터
@@ -27,16 +33,58 @@ class Yolov3Loss(nn.Module):
 
         return tot_loss
 
+    def cal_iou_base_loss(self, pred_boxes, target_boxes, coord_mask, bs, S):
+
+        pred_b_bbox = self.util_func.get_pred_bbox(pred_boxes)
+        target_b_bbox = self.util_func.get_pred_bbox(target_boxes)
+        # (bs, S, S, B, 4), (bs, S, S, B, 4)
+        # pred_b_bbox[noobj_mask] = 0 # 유효하지 않은 타겟 제거
+        # target_b_bbox[noobj_mask] = 0 # 유효하지 않은 타겟 제거
+        #pred_b_bbox, target_b_bbox의 원소는 [bx, by, bw, bh] -> 모두 0보다 큰 값임을 확인
+
+        # 음수 값이 없는지 확인
+        if (pred_b_bbox < 0).any() or (target_b_bbox < 0).any():
+            print("bbox 텐서에 음수 값이 포함되어 있습니다")
+            return torch.tensor(0.0, device=self.device)
+
+        # IoU 계산 (형태: (bs, S, S, B))
+        ious = self.util_func.compute_iou(pred_b_bbox, target_b_bbox)
+
+        # B(anchorbox idx) 결과치로부터 가장 좋은 값 1개만 선택하기
+        best_iou_idx = ious.argmax(dim=-1, keepdim=True)  # 형태: (bs, S, S, 1)
+        conf_mask = torch.gather(coord_mask, 3, best_iou_idx)
+        # gather를 위한 인덱스 준비 #(bs, S, S, 1) -> (bs, S, S, 1, 4)
+        best_iou_idx = best_iou_idx.unsqueeze(-1).expand(bs, S, S, 1, 4)
+
+        # 가장 좋은 예측 및 타겟 박스 추출  #형태: (bs, S, S, 1, 4)
+        best_p_bbox = torch.gather(pred_b_bbox, 3, best_iou_idx)  
+        best_t_bbox = torch.gather(target_b_bbox, 3, best_iou_idx)
+        # 불필요한 차원 제거    #형태: (bs, S, S, 4)
+        best_p_bbox = best_p_bbox.squeeze(3)
+        best_t_bbox = best_t_bbox.squeeze(3)
+        conf_mask = conf_mask.expand(bs, S, S, 4)
+
+        # 선택된 박스들에 음수 값이 없는지 확인
+        if (best_p_bbox < 0).any() or (best_t_bbox < 0).any():
+            print("선택된 박스들에 음수 값이 포함되어 있습니다")
+            return torch.tensor(0.0, device=self.device)
+
+        # 선택된 박스들로 IoU 계산
+        C_ious = self.util_func.compute_iou(best_p_bbox[conf_mask], best_t_bbox[conf_mask])
+
+        coord_loss = (1.0 - C_ious).sum()  # 필터링한 C_ious 값을 사용하여 손실 계산
+        return coord_loss
+
 
     def cal_loss(self, predictions, target):
         # Assert 구문을 활용하여 grid cell의 크기가 동일한지 확인
         assert predictions.size(1) == predictions.size(2), "그리드셀 차원이 맞지 않음"
 
-        batch_size = predictions.size(0) # Batch_size의 사이즈 정보를 추출
+        bs = predictions.size(0) # Batch_size의 사이즈 정보를 추출
         S = predictions.size(2) # grid cell의 개수 정보를 추출
         # [Batch_size, S, S, (5 + C) * B] ->  [Batch_size, S, S, B, (5 + C)]로 변환
-        predictions = predictions.view(batch_size, S, S, self.B, 5 + self.C)
-        target = target.view(batch_size, S, S, self.B, 5 + self.C)
+        predictions = predictions.view(bs, S, S, self.B, 5 + self.C)
+        target = target.view(bs, S, S, self.B, 5 + self.C)
 
         # 2) BBox좌표, OS, CS 정보 추출하여 재배치
         pred_boxes = predictions[..., :4] # [batch_size, S, S, B, 4]
@@ -67,11 +115,15 @@ class Yolov3Loss(nn.Module):
         # expand_as는 expand랑 거의 기능이 같다
         coord_mask_box = coord_mask.unsqueeze(-1).expand_as(target_boxes)
 
-        # 5) Localization Loss 계산하기
-        # bbox의 값이 [tx, ty, tw, th]이니 한꺼번에 loss 계산
-        coord_loss = self.lambda_coord * (
-            (pred_boxes[coord_mask_box] - target_boxes[coord_mask_box]) ** 2
-        ).sum()
+        if self.cho_mode != True: #기본모드로 계산시
+            # 5) Localization Loss 계산하기
+            # bbox의 값이 [tx, ty, tw, th]이니 한꺼번에 loss 계산
+            coord_loss = self.lambda_coord * (
+                (pred_boxes[coord_mask_box] - target_boxes[coord_mask_box]) ** 2
+            ).sum()
+        
+        else: # best 결과값으로 Loss계산 + Local Loss도 IOU기반으로 계산
+            coord_loss = self.cal_iou_base_loss(pred_boxes, target_boxes, coord_mask, bs, S)
 
         # 6) OS(objectness Score)의 마스크 필터를 활용한 필터링
         # 7) Objectness Loss 계산하기
@@ -88,11 +140,10 @@ class Yolov3Loss(nn.Module):
         element_loss = coord_loss + obj_loss + noobj_loss + class_loss
 
         return element_loss
-    
 
 def loss_debug():
     # 디버그용 데이터 생성하기
-    S_list = [52, 26, 13]
+    S_list = coco_data.S_list
     outputs, targets = [], []
     for S in S_list:
         output = torch.rand(1, 255, S, S)
@@ -104,7 +155,7 @@ def loss_debug():
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    yolov3_loss = Yolov3Loss(B=3, C=80, device=device.type)
+    yolov3_loss = Yolov3Loss(B=3, C=80, device=device.type, cal_mode=False)
 
     loss = yolov3_loss(outputs, targets)
     print(f"Loss: {loss.item()}")
