@@ -64,10 +64,12 @@ class CustomDataset(Dataset):
         # 이때 bw, bh, pw, ph가 [0~1] 정규좌표평면상의 데이터여서
         # 역함수 t = ln(b/p)를 수행 시 NaN이 발생할 수 있다.
         # 따라서 스케일링 + 0 이 되는것 방지 두개의 안전장치를 걸어둔다.
-        bw_scaled = bw * 416 + 1e-6
-        bh_scaled = bh * 416 + 1e-6
-        pw_scaled = pw * 416 + 1e-6
-        ph_scaled = ph * 416 + 1e-6
+        scale_factor = 1000
+        eclipse = 1e-6
+        bw_scaled = bw * scale_factor + eclipse
+        bh_scaled = bh * scale_factor + eclipse
+        pw_scaled = pw * scale_factor + eclipse
+        ph_scaled = ph * scale_factor + eclipse
         tw = torch.log(bw_scaled / pw_scaled)
         th = torch.log(bh_scaled / ph_scaled)
 
